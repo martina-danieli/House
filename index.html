@@ -78,7 +78,7 @@
     <p><b>David &rarr; Zara &rarr; Jelena &rarr; Chloe &rarr; Martina</b></p>
     <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up.</p>
     <p class="small">Clean when it wasn't your turn and you get the next one off. Whoever was due goes again tomorrow.</p>
-    <p class="small">Anyone away is skipped.</p>
+    <p class="small">Anyone away is skipped, and gets two days after they're back before their name comes up again.</p>
   </div>
 
   <div class="sec away">
@@ -121,6 +121,7 @@
   const nextDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
   const fmt = (d, o) => d.toLocaleDateString("en-GB", o);
   const fmtStr = s => { const p = s.split("-").map(Number); return fmt(new Date(p[0], p[1]-1, p[2]), {day:"numeric", month:"short"}); };
+  const shift = (s, n) => { const p = s.split("-").map(Number); return ymd(new Date(p[0], p[1]-1, p[2] + n)); };
 
   const today = midnight(new Date());
   const todayStr = ymd(today);
@@ -134,7 +135,10 @@
   }
 
   let trips = [], cleanings = [];
-  const isAway = (name, ds) => trips.some(t => t.name === name && t.from_date <= ds && ds <= t.to_date);
+  // Off the hook while away, plus two days to settle back in: someone home on
+  // the 15th is next expected to clean on the 17th.
+  const backOn = t => shift(t.to_date, 2);
+  const isAway = (name, ds) => trips.some(t => t.name === name && t.from_date <= ds && ds < backOn(t));
 
   // Walk day by day from the start. The pointer only moves when the person
   // on duty marks the kitchen clean; future days assume everyone does.
@@ -215,14 +219,14 @@
     $("list").innerHTML = ""; shown = 0; addDays(prev);
 
     const el = $("trips"); el.innerHTML = "";
-    const upcoming = trips.filter(t => t.to_date >= todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
+    const upcoming = trips.filter(t => backOn(t) > todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
     if (!upcoming.length){ const p = document.createElement("p"); p.className = "muted"; p.textContent = "Nobody is away."; el.appendChild(p); }
     upcoming.forEach(t => {
       const row = document.createElement("div"); row.className = "trip";
       const span = document.createElement("span");
       const nm = document.createElement("b"); nm.textContent = t.name;
       span.appendChild(nm);
-      span.appendChild(document.createTextNode(" away " + fmtStr(t.from_date) + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : "")));
+      span.appendChild(document.createTextNode(" away " + fmtStr(t.from_date) + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : "") + ", back on " + fmtStr(backOn(t))));
       const x = document.createElement("button"); x.textContent = "×"; x.title = "Remove";
       x.onclick = () => removeTrip(t.id);
       row.appendChild(span); row.appendChild(x); el.appendChild(row);
