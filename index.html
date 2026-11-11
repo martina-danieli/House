@@ -112,7 +112,7 @@
   // =============================================
 
   const CYCLE = ["David","Zara","Jelena","Chloe","Martina"];
-  const START = new Date(2026, 10, 12);   // Thu 12 Nov 2026
+  const START = new Date(2026, 10, 11);   // Wed 11 Nov 2026
   const DAY = 86400000, HORIZON = 120;
 
   const $ = id => document.getElementById(id);
@@ -205,7 +205,7 @@
       n.appendChild(nb); st.appendChild(n);
       const u = document.createElement("button"); u.className = "link"; u.textContent = "undo";
       u.onclick = undoToday; ct.appendChild(u);
-    } else if (today >= START){
+    } else if (t0 && t0.who){
       const b = document.createElement("button"); b.className = "go"; b.textContent = "I cleaned";
       b.onclick = () => { $("cleanForm").classList.toggle("open"); $("msg").textContent = ""; };
       ct.appendChild(b);
