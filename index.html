@@ -39,6 +39,24 @@
   .trip{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ddd;padding:5px 0}
   .trip button{padding:0 9px;font-weight:bold}
   .msg{margin-top:8px;font-weight:bold;color:#c0392b}
+  .calnav{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .calnav b{font-size:1.05rem}
+  .calnav button{padding:2px 10px}
+  .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+  .dow{text-align:center;font-size:.7rem;font-weight:bold;color:#666;padding-bottom:2px}
+  .cell{min-height:54px;border:1px solid #e6e6e6;padding:2px 3px;font-size:.72rem;line-height:1.15;overflow:hidden}
+  .cell.blank{border-color:transparent;background:none !important}
+  .cell.istoday{outline:2px solid #111}
+  .cell .num{font-weight:bold;font-size:.78rem}
+  .cell .nm,.cell .swap{display:block;font-weight:bold;font-size:.66rem;overflow-wrap:anywhere}
+  .cell .miss{color:#999}
+  .key{margin-top:8px;font-size:.8rem}
+  .key span{font-weight:bold;margin-right:10px;white-space:nowrap}
+  @media (max-width:430px){
+    .wrap{padding-left:8px;padding-right:8px}
+    .sec{padding-left:10px;padding-right:10px}
+    .cell{min-height:60px;padding:2px}
+  }
   .muted{color:#555}
   .small{font-size:.9rem}
 </style>
@@ -75,7 +93,7 @@
 
   <div class="sec order">
     <h2>Order</h2>
-    <p><b>David &rarr; Zara &rarr; Jelena &rarr; Chloe &rarr; Martina</b></p>
+    <p id="orderLine"></p>
     <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up.</p>
     <p class="small">Clean when it wasn't your turn and you get the next one off. Whoever was due goes again tomorrow.</p>
     <p class="small">Anyone away is skipped, and gets two days after they're back before their name comes up again.</p>
@@ -99,8 +117,16 @@
 
   <div class="sec sched">
     <h2>Schedule</h2>
-    <table id="list"></table>
-    <button id="more">Show more</button>
+    <div class="calnav">
+      <button id="prevM">&lsaquo;</button><b id="monthLabel"></b><button id="nextM">&rsaquo;</button>
+    </div>
+    <div class="cal" id="cal"></div>
+    <p class="small muted" id="calKey">&#10003; cleaned. A second name means someone else did it that day.</p>
+    <button class="link" id="toggleList">show as a list</button>
+    <div id="listWrap" style="display:none">
+      <table id="list"></table>
+      <button id="more">Show more</button>
+    </div>
     <p class="small muted">Future days assume everyone cleans on their day.</p>
   </div>
 </div>
@@ -112,6 +138,8 @@
   // =============================================
 
   const CYCLE = ["David","Zara","Jelena","Chloe","Martina"];
+  const COLOR = { David:"#c0392b", Zara:"#7d3c98", Jelena:"#1f6fb2", Chloe:"#2e8b57", Martina:"#b8860b" };
+  const tint = n => COLOR[n] + "1f";          // same colour, faint, for cell backgrounds
   const START = new Date(2026, 10, 11);   // Wed 11 Nov 2026
   const DAY = 86400000, HORIZON = 120;
 
@@ -194,6 +222,7 @@
     const t0 = dayFor(ymd(first));
     if (today < START) $("label").textContent = "Starts with";
     $("who").textContent = t0 ? (t0.who || nobody) : nobody;
+    $("who").style.color = (t0 && t0.who) ? COLOR[t0.who] : "#111";
     $("date").textContent = fmt(first, {weekday:"long", day:"numeric", month:"long"});
 
     const rec = t0 && t0.rec;
@@ -217,6 +246,7 @@
 
     const prev = shown || 14;
     $("list").innerHTML = ""; shown = 0; addDays(prev);
+    renderOrder(); renderCal();
 
     const el = $("trips"); el.innerHTML = "";
     const upcoming = trips.filter(t => backOn(t) > todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
@@ -226,11 +256,68 @@
       const span = document.createElement("span");
       const nm = document.createElement("b"); nm.textContent = t.name;
       span.appendChild(nm);
-      span.appendChild(document.createTextNode(" away " + fmtStr(t.from_date) + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : "") + ", back on " + fmtStr(backOn(t))));
+      span.appendChild(document.createTextNode(" away " + fmtStr(t.from_date) + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : "") + ". Back in the rotation " + fmtStr(backOn(t)) + "."));
       const x = document.createElement("button"); x.textContent = "×"; x.title = "Remove";
       x.onclick = () => removeTrip(t.id);
       row.appendChild(span); row.appendChild(x); el.appendChild(row);
     });
+  }
+
+  // The order line, each name in its own colour. Doubles as the key.
+  function renderOrder(){
+    const el = $("orderLine"); el.innerHTML = "";
+    CYCLE.forEach((n, i) => {
+      const b = document.createElement("b");
+      b.textContent = n; b.style.color = COLOR[n];
+      el.appendChild(b);
+      if (i < CYCLE.length - 1) el.appendChild(document.createTextNode(" \u2192 "));
+    });
+  }
+
+  let calMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  function renderCal(){
+    const cal = $("cal"); cal.innerHTML = "";
+    $("monthLabel").textContent = fmt(calMonth, {month:"long", year:"numeric"});
+
+    ["M","T","W","T","F","S","S"].forEach(d => {
+      const h = document.createElement("div"); h.className = "dow"; h.textContent = d; cal.appendChild(h);
+    });
+
+    const firstOfMonth = new Date(calMonth.getFullYear(), calMonth.getMonth(), 1);
+    const lead = (firstOfMonth.getDay() + 6) % 7;            // weeks run Monday to Sunday
+    const inMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 0).getDate();
+
+    for (let i = 0; i < lead; i++){
+      const c = document.createElement("div"); c.className = "cell blank"; cal.appendChild(c);
+    }
+    for (let dnum = 1; dnum <= inMonth; dnum++){
+      const date = new Date(calMonth.getFullYear(), calMonth.getMonth(), dnum);
+      const ds = ymd(date);
+      const d = dayFor(ds);
+      const cell = document.createElement("div");
+      cell.className = "cell" + (ds === todayStr ? " istoday" : "");
+
+      const num = document.createElement("span");
+      num.className = "num"; num.textContent = dnum; cell.appendChild(num);
+
+      if (d && d.who){
+        cell.style.background = tint(d.who);
+        const nm = document.createElement("span");
+        nm.className = "nm"; nm.style.color = COLOR[d.who];
+        nm.textContent = d.who;
+        if (d.rec && d.rec.cleaned_by === d.who) nm.textContent += " \u2713";
+        if (!d.rec && ds < todayStr) nm.style.color = "#999";   // nobody cleaned that day
+        cell.appendChild(nm);
+        if (d.rec && d.rec.cleaned_by !== d.who){          // someone else stepped in
+          const sw = document.createElement("span");
+          sw.className = "swap"; sw.style.color = COLOR[d.rec.cleaned_by];
+          sw.textContent = "\u2713 " + d.rec.cleaned_by;
+          cell.appendChild(sw);
+        }
+      }
+      cal.appendChild(cell);
+    }
   }
 
   function addDays(n){
@@ -306,6 +393,13 @@
   $("cSave").onclick = () => { if (!configured){ $("msg").textContent = "Setup needed: paste the Supabase URL and key into index.html."; return; } markClean($("cName").value); };
   $("fFrom").onchange = () => { if ($("fTo").value < $("fFrom").value) $("fTo").value = $("fFrom").value; };
   $("more").onclick = () => addDays(14);
+  $("prevM").onclick = () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()-1, 1); renderCal(); };
+  $("nextM").onclick = () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+1, 1); renderCal(); };
+  $("toggleList").onclick = () => {
+    const w = $("listWrap"), open = w.style.display !== "none";
+    w.style.display = open ? "none" : "block";
+    $("toggleList").textContent = open ? "show as a list" : "hide the list";
+  };
 
   $("save").onclick = async () => {
     const name = $("fName").value, from_date = $("fFrom").value, to_date = $("fTo").value;
