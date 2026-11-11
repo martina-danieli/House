@@ -98,7 +98,8 @@
     <p id="orderLine"></p>
     <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up.</p>
     <p class="small">Clean when it wasn't your turn and you get the next one off. Whoever was due goes again tomorrow.</p>
-    <p class="small">Anyone away is skipped. Once you're home your name comes up between two and four days later, wherever the order happens to be. Two of you home on the same day go back in the usual running order, one after the other.</p>
+    <p class="small">Away: your name is off the list, then comes back up two or three days after your last day away, ahead of whoever was next. More than two weeks away and it's three or four days. Two of you home together take consecutive days, longest since your last turn first.</p>
+    <p class="small">Clean for someone right before you leave and that pays for your turn back, so you rejoin a full lap later instead.</p>
     <p class="small"><b>Let your name sit there seven days running and you're paying for a cleaning service.</b></p>
   </div>
 
@@ -143,7 +144,6 @@
   const CYCLE = ["David","Zara","Jelena","Chloe","Martina"];
   const COLOR = { David:"#c0392b", Zara:"#7d3c98", Jelena:"#1f6fb2", Chloe:"#2e8b57", Martina:"#b8860b" };
   const OWE_AT = 7;                           // name up this many days running -> you pay for a cleaner
-  const LATEST_BACK = 4;                      // home from a trip -> your name is up within this many days
   const tint = n => COLOR[n] + "1f";          // same colour, faint, for cell backgrounds
   const START = new Date(2026, 10, 11);   // Wed 11 Nov 2026
   const DAY = 86400000, HORIZON = 120;
@@ -170,8 +170,25 @@
   let trips = [], cleanings = [];
   // Off the hook while away, plus two days to settle back in: someone home on
   // the 15th is next expected to clean on the 17th.
-  const backOn = t => shift(t.to_date, 2);
-  const isAway = (name, ds) => trips.some(t => t.name === name && t.from_date <= ds && ds < backOn(t));
+  // --- travel ---------------------------------------------------------
+  // Short trip: skipped until two days after the last day away, and the owed
+  // turn lands on that day or the one after. Over two weeks away: one extra
+  // day on both. The coin is fixed per trip so every phone shows the same day.
+  const LONG_TRIP = 14;
+  const dayCount = (a, b) => {
+    const pa = a.split("-").map(Number), pb = b.split("-").map(Number);
+    return Math.round((new Date(pb[0], pb[1]-1, pb[2]) - new Date(pa[0], pa[1]-1, pa[2])) / DAY);
+  };
+  const isLongTrip = t => dayCount(t.from_date, t.to_date) > LONG_TRIP;
+  const homeDay = t => shift(t.to_date, isLongTrip(t) ? 3 : 2);   // first day the name can come up
+  function coin(t){
+    const s = t.name + "|" + t.from_date + "|" + t.to_date;
+    let h = 7;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 1000003;
+    return h % 2;
+  }
+  const dutyDay = t => shift(homeDay(t), coin(t));                // homeDay, or the day after
+  const isAway = (name, ds) => trips.some(t => t.name === name && t.from_date <= ds && ds < homeDay(t));
 
   // Walk day by day from the start. The pointer only moves when the person
   // on duty marks the kitchen clean; future days assume everyone does.
@@ -181,10 +198,10 @@
     CYCLE.forEach(n => credits[n] = 0);
     const byDate = {};
     cleanings.forEach(c => { if (!byDate[c.cleaned_date]) byDate[c.cleaned_date] = c; });
+    const lastClean = {};
 
-    // Every trip owes one turn: the name has to come up between two and four
-    // days after the last day away, whatever the running order says.
-    const owed = trips.map(t => ({ name: t.name, from: backOn(t), by: shift(t.to_date, LATEST_BACK), done: false }));
+    // One owed turn per trip, on that trip's own day.
+    const owed = trips.map(t => ({ name: t.name, from: homeDay(t), by: dutyDay(t), done: false }));
 
     function assign(ds){
       for (let k = 0; k < CYCLE.length; k++){
@@ -193,42 +210,65 @@
       }
       return -1;                                   // everyone away
     }
-    // How far off someone is in the running order right now. Used to settle
-    // ties when two people get home on the same day: they go back in the
-    // order the rotation would have reached them.
     function rank(name){
       const i = CYCLE.indexOf(name);
       return i < 0 ? CYCLE.length : (i - p + CYCLE.length) % CYCLE.length;
     }
+    // Who is owed a turn today. Two home together: whoever's own day came
+    // first, then whoever has gone longest without a turn, then running order.
     function dueBack(ds){
       let best = null;
       for (let q = 0; q < owed.length; q++){
         const o = owed[q];
         if (o.done || ds < o.by || isAway(o.name, ds)) continue;
-        if (!best) { best = o; continue; }
-        if (o.by < best.by) { best = o; continue; }                       // waiting longer goes first
-        if (o.by === best.by && rank(o.name) < rank(best.name)) best = o; // same day home: running order
+        if (!best){ best = o; continue; }
+        if (o.by !== best.by){ if (o.by < best.by) best = o; continue; }
+        const a = lastClean[o.name] || "", b = lastClean[best.name] || "";
+        if (a !== b){ if (a < b) best = o; continue; }
+        if (rank(o.name) < rank(best.name)) best = o;
       }
-      return best ? CYCLE.indexOf(best.name) : -1;
+      return best;
     }
-    function advance(from){
+    function settle(name, ds){
+      owed.forEach(o => { if (o.name === name && ds >= o.from) o.done = true; });
+    }
+    // Skipping someone spends one of the turns they banked by cleaning out of
+    // turn. If they were owed a turn for coming home, that is the one it pays
+    // for, so they rejoin a lap later instead of on their day back.
+    function advance(from, ds){
+      const nextDs = shift(ds, 1);
       let i = (from + 1) % CYCLE.length;
       for (let g = 0; g < CYCLE.length; g++){
-        if (credits[CYCLE[i]] > 0){ credits[CYCLE[i]]--; i = (i + 1) % CYCLE.length; }
-        else break;
+        const n = CYCLE[i];
+        // A banked turn can't be spent while they're away: it's being held
+        // for the turn they're owed when they get back.
+        if (credits[n] > 0 && !isAway(n, nextDs)){
+          credits[n]--;
+          settle(n, nextDs);
+          i = (i + 1) % CYCLE.length;
+        } else break;
       }
       return i;
-    }
-    function settle(name, ds){                     // a turn taken clears any debt from a trip
-      owed.forEach(o => { if (o.name === name && ds >= o.from) o.done = true; });
     }
 
     const days = [];
     let streakName = null, streak = 0;
     for (let d = new Date(START); ymd(d) <= endStr; d = nextDay(d)){
       const ds = ymd(d);
-      const nat = assign(ds);                      // whose turn it would be
-      const back = dueBack(ds);                    // someone overdue since getting home
+      const nat = assign(ds);                      // whose turn the order says it is
+
+      // Someone owed a turn for coming home. If they already cleaned for
+      // somebody before they left, that pays for this one and they rejoin at
+      // their next turn instead, a full lap later.
+      let back = -1;
+      for (let g = 0; g < CYCLE.length + 1; g++){
+        const o = dueBack(ds);
+        if (!o) break;
+        if (credits[o.name] > 0){ credits[o.name]--; o.done = true; continue; }
+        back = CYCLE.indexOf(o.name);
+        break;
+      }
+
       const forced = back >= 0 && back !== nat;
       const i = forced ? back : nat;
       const who = i >= 0 ? CYCLE[i] : null;
@@ -246,10 +286,11 @@
 
       const cleaner = rec ? rec.cleaned_by : ((ds >= todayStr && who) ? who : null);  // future days assume it gets done
       if (cleaner){
+        lastClean[cleaner] = ds;
         settle(cleaner, ds);
-        if (who && cleaner === who && !forced) p = advance(i);              // their turn, taken
-        else if (who && cleaner === who && forced) credits[cleaner] = (credits[cleaner] || 0) + 1;  // welcome-back turn: skip their next slot
-        else credits[cleaner] = (credits[cleaner] || 0) + 1;                // cleaned out of turn
+        if (who && cleaner === who && !forced) p = advance(i, ds);   // their turn, taken
+        else if (!(who && cleaner === who)) credits[cleaner] = (credits[cleaner] || 0) + 1;  // cleaned out of turn
+        // a forced turn taken leaves the order where it was
       }
       // a past day with nothing logged: the name stays up
     }
@@ -304,14 +345,17 @@
     renderOrder(); renderCal();
 
     const el = $("trips"); el.innerHTML = "";
-    const upcoming = trips.filter(t => backOn(t) > todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
+    const upcoming = trips.filter(t => dutyDay(t) >= todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
     if (!upcoming.length){ const p = document.createElement("p"); p.className = "muted"; p.textContent = "Nobody is away."; el.appendChild(p); }
     upcoming.forEach(t => {
       const row = document.createElement("div"); row.className = "trip";
       const span = document.createElement("span");
       const nm = document.createElement("b"); nm.textContent = t.name;
       span.appendChild(nm);
-      span.appendChild(document.createTextNode(" away " + fmtStr(t.from_date) + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : "") + ". Back in the rotation " + fmtStr(backOn(t)) + "."));
+      const turn = days.find(x => x.who === t.name && x.ds >= homeDay(t));   // the day the schedule actually gives them
+      span.appendChild(document.createTextNode(" away " + fmtStr(t.from_date)
+        + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : "")
+        + ". Next turn " + fmtStr(turn ? turn.ds : dutyDay(t)) + "."));
       const x = document.createElement("button"); x.textContent = "×"; x.title = "Remove";
       x.onclick = () => removeTrip(t.id);
       row.appendChild(span); row.appendChild(x); el.appendChild(row);
