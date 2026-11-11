@@ -98,7 +98,7 @@
     <p id="orderLine"></p>
     <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up.</p>
     <p class="small">Clean when it wasn't your turn and you get the next one off. Whoever was due goes again tomorrow.</p>
-    <p class="small">Anyone away is skipped. Once you're home your name comes up between two and four days later, wherever the order happens to be.</p>
+    <p class="small">Anyone away is skipped. Once you're home your name comes up between two and four days later, wherever the order happens to be. Two of you home on the same day go back in the usual running order, one after the other.</p>
     <p class="small"><b>Let your name sit there seven days running and you're paying for a cleaning service.</b></p>
   </div>
 
@@ -193,12 +193,21 @@
       }
       return -1;                                   // everyone away
     }
+    // How far off someone is in the running order right now. Used to settle
+    // ties when two people get home on the same day: they go back in the
+    // order the rotation would have reached them.
+    function rank(name){
+      const i = CYCLE.indexOf(name);
+      return i < 0 ? CYCLE.length : (i - p + CYCLE.length) % CYCLE.length;
+    }
     function dueBack(ds){
       let best = null;
       for (let q = 0; q < owed.length; q++){
         const o = owed[q];
         if (o.done || ds < o.by || isAway(o.name, ds)) continue;
-        if (!best || o.by < best.by) best = o;
+        if (!best) { best = o; continue; }
+        if (o.by < best.by) { best = o; continue; }                       // waiting longer goes first
+        if (o.by === best.by && rank(o.name) < rank(best.name)) best = o; // same day home: running order
       }
       return best ? CYCLE.indexOf(best.name) : -1;
     }
