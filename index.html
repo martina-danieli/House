@@ -39,6 +39,7 @@
   .trip{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ddd;padding:5px 0}
   .trip button{padding:0 9px;font-weight:bold}
   .msg{margin-top:8px;font-weight:bold;color:#c0392b}
+  .owe{background:#c0392b;color:#fff;font-weight:bold;padding:7px 10px;margin:6px 0}
   .calnav{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
   .calnav b{font-size:1.05rem}
   .calnav button{padding:2px 10px}
@@ -48,6 +49,7 @@
   .cell.blank{border-color:transparent;background:none !important}
   .cell.istoday{outline:2px solid #111}
   .cell .num{font-weight:bold;font-size:.78rem}
+  .cell.owes{border:2px solid #c0392b}
   .cell .nm,.cell .swap{display:block;font-weight:bold;font-size:.66rem;overflow-wrap:anywhere}
   .cell .miss{color:#999}
   .key{margin-top:8px;font-size:.8rem}
@@ -96,7 +98,8 @@
     <p id="orderLine"></p>
     <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up.</p>
     <p class="small">Clean when it wasn't your turn and you get the next one off. Whoever was due goes again tomorrow.</p>
-    <p class="small">Anyone away is skipped, and gets two days after they're back before their name comes up again.</p>
+    <p class="small">Anyone away is skipped. Once you're home your name comes up between two and four days later, wherever the order happens to be.</p>
+    <p class="small"><b>Let your name sit there seven days running and you're paying for a cleaning service.</b></p>
   </div>
 
   <div class="sec away">
@@ -121,7 +124,7 @@
       <button id="prevM">&lsaquo;</button><b id="monthLabel"></b><button id="nextM">&rsaquo;</button>
     </div>
     <div class="cal" id="cal"></div>
-    <p class="small muted" id="calKey">&#10003; cleaned. A second name means someone else did it that day.</p>
+    <p class="small muted" id="calKey">&#10003; cleaned. A second name means someone else did it that day. A red box is day seven or beyond.</p>
     <button class="link" id="toggleList">show as a list</button>
     <div id="listWrap" style="display:none">
       <table id="list"></table>
@@ -139,6 +142,8 @@
 
   const CYCLE = ["David","Zara","Jelena","Chloe","Martina"];
   const COLOR = { David:"#c0392b", Zara:"#7d3c98", Jelena:"#1f6fb2", Chloe:"#2e8b57", Martina:"#b8860b" };
+  const OWE_AT = 7;                           // name up this many days running -> you pay for a cleaner
+  const LATEST_BACK = 4;                      // home from a trip -> your name is up within this many days
   const tint = n => COLOR[n] + "1f";          // same colour, faint, for cell backgrounds
   const START = new Date(2026, 10, 11);   // Wed 11 Nov 2026
   const DAY = 86400000, HORIZON = 120;
@@ -177,12 +182,25 @@
     const byDate = {};
     cleanings.forEach(c => { if (!byDate[c.cleaned_date]) byDate[c.cleaned_date] = c; });
 
+    // Every trip owes one turn: the name has to come up between two and four
+    // days after the last day away, whatever the running order says.
+    const owed = trips.map(t => ({ name: t.name, from: backOn(t), by: shift(t.to_date, LATEST_BACK), done: false }));
+
     function assign(ds){
       for (let k = 0; k < CYCLE.length; k++){
         const i = (p + k) % CYCLE.length;
         if (!isAway(CYCLE[i], ds)) return i;
       }
       return -1;                                   // everyone away
+    }
+    function dueBack(ds){
+      let best = null;
+      for (let q = 0; q < owed.length; q++){
+        const o = owed[q];
+        if (o.done || ds < o.by || isAway(o.name, ds)) continue;
+        if (!best || o.by < best.by) best = o;
+      }
+      return best ? CYCLE.indexOf(best.name) : -1;
     }
     function advance(from){
       let i = (from + 1) % CYCLE.length;
@@ -192,24 +210,42 @@
       }
       return i;
     }
+    function settle(name, ds){                     // a turn taken clears any debt from a trip
+      owed.forEach(o => { if (o.name === name && ds >= o.from) o.done = true; });
+    }
 
     const days = [];
+    let streakName = null, streak = 0;
     for (let d = new Date(START); ymd(d) <= endStr; d = nextDay(d)){
       const ds = ymd(d);
-      const i = assign(ds);
+      const nat = assign(ds);                      // whose turn it would be
+      const back = dueBack(ds);                    // someone overdue since getting home
+      const forced = back >= 0 && back !== nat;
+      const i = forced ? back : nat;
+      const who = i >= 0 ? CYCLE[i] : null;
+      const natWho = nat >= 0 ? CYCLE[nat] : null;
       const rec = byDate[ds] || null;
-      days.push({ ds: ds, date: new Date(d), who: i >= 0 ? CYCLE[i] : null, rec: rec, future: ds > todayStr });
-      if (rec){
-        if (i >= 0 && rec.cleaned_by === CYCLE[i]) p = advance(i);   // duty done, move on
-        else credits[rec.cleaned_by] = (credits[rec.cleaned_by] || 0) + 1;  // cleaned out of turn
-      } else if (ds >= todayStr && i >= 0){
-        p = advance(i);         // today and beyond: assume it gets done
+
+      // The run is counted against whoever the order says is up, so being
+      // covered or bumped by someone coming home doesn't wipe it.
+      if (natWho && natWho === streakName) streak++; else { streakName = natWho; streak = natWho ? 1 : 0; }
+      const clearedOwn = !!rec && rec.cleaned_by === natWho;
+      if (clearedOwn){ streakName = null; streak = 0; }
+
+      days.push({ ds: ds, date: new Date(d), who: who, rec: rec, future: ds > todayStr,
+                  forced: forced, streak: (forced || clearedOwn) ? 0 : streak });
+
+      const cleaner = rec ? rec.cleaned_by : ((ds >= todayStr && who) ? who : null);  // future days assume it gets done
+      if (cleaner){
+        settle(cleaner, ds);
+        if (who && cleaner === who && !forced) p = advance(i);              // their turn, taken
+        else if (who && cleaner === who && forced) credits[cleaner] = (credits[cleaner] || 0) + 1;  // welcome-back turn: skip their next slot
+        else credits[cleaner] = (credits[cleaner] || 0) + 1;                // cleaned out of turn
       }
       // a past day with nothing logged: the name stays up
     }
     return days;
   }
-
   let days = [], shown = 0;
   const nobody = "Nobody (everyone away)";
   const dayFor = ds => days.find(x => x.ds === ds);
@@ -239,6 +275,16 @@
       const u = document.createElement("button"); u.className = "link"; u.textContent = "undo";
       u.onclick = undoToday; ct.appendChild(u);
     } else if (t0 && t0.who){
+      if (t0.streak >= OWE_AT){
+        const w = document.createElement("p"); w.className = "owe";
+        w.textContent = t0.who + "'s name has been up " + t0.streak + " days running. "
+          + t0.who + " is paying for a cleaning service.";
+        st.appendChild(w);
+      } else if (t0.streak >= 2){
+        const w = document.createElement("p"); w.className = "small muted";
+        w.textContent = "Day " + t0.streak + " of " + OWE_AT + ". At " + OWE_AT + " you're paying for a cleaner.";
+        st.appendChild(w);
+      }
       const b = document.createElement("button"); b.className = "go"; b.textContent = "I cleaned";
       b.onclick = () => { $("cleanForm").classList.toggle("open"); $("msg").textContent = ""; };
       ct.appendChild(b);
@@ -308,6 +354,11 @@
         nm.textContent = d.who;
         if (d.rec && d.rec.cleaned_by === d.who) nm.textContent += " \u2713";
         if (!d.rec && ds < todayStr) nm.style.color = "#999";   // nobody cleaned that day
+        if (d.streak >= OWE_AT){
+          cell.classList.add("owes");
+          nm.style.color = "#c0392b";
+          nm.textContent += " !";
+        }
         cell.appendChild(nm);
         if (d.rec && d.rec.cleaned_by !== d.who){          // someone else stepped in
           const sw = document.createElement("span");
