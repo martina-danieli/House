@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen Rotation</title>
+<style>
+  body{margin:0;background:#d9d9d9;color:#111;font-family:"Times New Roman",Times,serif;font-size:18px;line-height:1.4}
+  .wrap{max-width:600px;margin:0 auto;padding:22px 14px 50px}
+  h1{font-size:1.9rem;margin:0 0 4px}
+  .sub{margin:0 0 16px}
+  .sec{background:#fff;border-left:8px solid var(--c);padding:12px 16px;margin:12px 0}
+  .sec h2{font-size:1.15rem;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;color:var(--c)}
+  .today{--c:#c0392b}
+  .duty{--c:#1f6fb2}
+  .order{--c:#2e8b57}
+  .away{--c:#7d3c98}
+  .sched{--c:#b8860b}
+  .big{font-size:2.2rem;font-weight:bold;line-height:1.1}
+  .done{color:#2e8b57}
+  ul{margin:0;padding-left:20px}
+  li{margin:5px 0}
+  p{margin:5px 0}
+  table{border-collapse:collapse;width:100%}
+  td{border-bottom:1px solid #ddd;padding:5px 4px}
+  tr.now td{font-weight:bold;background:#fdf1d0}
+  td.tick{width:1.6em;text-align:center;color:#2e8b57;font-weight:bold}
+  button,select,input{font-family:inherit;font-size:1rem}
+  button{background:#fff;border:1px solid #111;padding:4px 12px;cursor:pointer;margin:2px 0}
+  button.go{background:#2e8b57;color:#fff;border-color:#2e8b57;font-weight:bold;font-size:1.1rem;padding:7px 16px}
+  button.primary{background:#7d3c98;color:#fff;border-color:#7d3c98;font-weight:bold}
+  button.link{border:none;background:none;text-decoration:underline;padding:0;font-size:.95rem;color:#555}
+  .form{margin-top:10px;padding:10px;display:none}
+  .form.open{display:block}
+  .form.green{background:#e8f3ec}
+  .form.purple{background:#f3ecf6}
+  .form label{display:block;margin:6px 0 2px;font-weight:bold}
+  .form select,.form input{padding:4px;width:100%;box-sizing:border-box}
+  .trip{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ddd;padding:5px 0}
+  .trip button{padding:0 9px;font-weight:bold}
+  .msg{margin-top:8px;font-weight:bold;color:#c0392b}
+  .muted{color:#555}
+  .small{font-size:.9rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Kitchen Rotation</h1>
+  <p class="sub"><b>One person per day.</b> Kitchen clean before bed.</p>
+
+  <div class="sec today">
+    <h2 id="label">Today</h2>
+    <div class="big" id="who">&hellip;</div>
+    <div id="date"></div>
+    <div id="status"></div>
+    <div id="controls"></div>
+    <div class="form green" id="cleanForm">
+      <label for="cName">Who cleaned?</label>
+      <select id="cName"></select>
+      <p><button class="go" id="cSave">Confirm</button> <button id="cCancel">Cancel</button></p>
+    </div>
+  </div>
+
+  <div class="sec duty">
+    <h2>Your day</h2>
+    <ul>
+      <li><b>Morning:</b> unload the dishwasher</li>
+      <li><b>Night:</b> load the dishwasher and <b>run it</b></li>
+      <li>Wipe counters and stovetop</li>
+      <li>Empty the sink, trash out if full</li>
+      <li><b>Vacuum</b> the kitchen floor</li>
+    </ul>
+    <p>Can't do it? <b>Swap with someone</b> and tell the group chat. Don't just skip.</p>
+  </div>
+
+  <div class="sec order">
+    <h2>Order</h2>
+    <p><b>David &rarr; Zara &rarr; Jelena &rarr; Chloe &rarr; Martina</b></p>
+    <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up.</p>
+    <p class="small">Clean when it wasn't your turn and you get the next one off. Whoever was due goes again tomorrow.</p>
+    <p class="small">Anyone away is skipped.</p>
+  </div>
+
+  <div class="sec away">
+    <h2>Traveling</h2>
+    <div id="trips"><p class="muted">Loading&hellip;</p></div>
+    <button class="primary" id="openForm">I'm traveling</button>
+    <div class="form purple" id="form">
+      <label for="fName">Who</label>
+      <select id="fName"></select>
+      <label for="fFrom">First day away</label>
+      <input type="date" id="fFrom">
+      <label for="fTo">Last day away</label>
+      <input type="date" id="fTo">
+      <p><button class="primary" id="save">Save</button> <button id="cancel">Cancel</button></p>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="sec sched">
+    <h2>Schedule</h2>
+    <table id="list"></table>
+    <button id="more">Show more</button>
+    <p class="small muted">Future days assume everyone cleans on their day.</p>
+  </div>
+</div>
+
+<script>
+  // ====== PASTE YOUR SUPABASE VALUES HERE ======
+  const SUPABASE_URL = "https://sfvziebnpmwpsdaqwwso.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_k4zLMNMXy5yKjk5Pd3DWNQ_peZJJqKO";
+  // =============================================
+
+  const CYCLE = ["David","Zara","Jelena","Chloe","Martina"];
+  const START = new Date(2026, 10, 12);   // Thu 12 Nov 2026
+  const DAY = 86400000, HORIZON = 120;
+
+  const $ = id => document.getElementById(id);
+  const midnight = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const ymd = d => d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  const nextDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+  const fmt = (d, o) => d.toLocaleDateString("en-GB", o);
+  const fmtStr = s => { const p = s.split("-").map(Number); return fmt(new Date(p[0], p[1]-1, p[2]), {day:"numeric", month:"short"}); };
+
+  const today = midnight(new Date());
+  const todayStr = ymd(today);
+  const configured = !SUPABASE_URL.startsWith("PASTE") && !SUPABASE_KEY.startsWith("PASTE");
+
+  function api(path, opts){
+    opts = opts || {};
+    const headers = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+    for (const k in (opts.headers || {})) headers[k] = opts.headers[k];
+    return fetch(SUPABASE_URL + "/rest/v1/" + path, { method: opts.method || "GET", headers: headers, body: opts.body, cache: "no-store" });
+  }
+
+  let trips = [], cleanings = [];
+  const isAway = (name, ds) => trips.some(t => t.name === name && t.from_date <= ds && ds <= t.to_date);
+
+  // Walk day by day from the start. The pointer only moves when the person
+  // on duty marks the kitchen clean; future days assume everyone does.
+  function simulate(endStr){
+    let p = 0;
+    const credits = {};
+    CYCLE.forEach(n => credits[n] = 0);
+    const byDate = {};
+    cleanings.forEach(c => { if (!byDate[c.cleaned_date]) byDate[c.cleaned_date] = c; });
+
+    function assign(ds){
+      for (let k = 0; k < CYCLE.length; k++){
+        const i = (p + k) % CYCLE.length;
+        if (!isAway(CYCLE[i], ds)) return i;
+      }
+      return -1;                                   // everyone away
+    }
+    function advance(from){
+      let i = (from + 1) % CYCLE.length;
+      for (let g = 0; g < CYCLE.length; g++){
+        if (credits[CYCLE[i]] > 0){ credits[CYCLE[i]]--; i = (i + 1) % CYCLE.length; }
+        else break;
+      }
+      return i;
+    }
+
+    const days = [];
+    for (let d = new Date(START); ymd(d) <= endStr; d = nextDay(d)){
+      const ds = ymd(d);
+      const i = assign(ds);
+      const rec = byDate[ds] || null;
+      days.push({ ds: ds, date: new Date(d), who: i >= 0 ? CYCLE[i] : null, rec: rec, future: ds > todayStr });
+      if (rec){
+        if (i >= 0 && rec.cleaned_by === CYCLE[i]) p = advance(i);   // duty done, move on
+        else credits[rec.cleaned_by] = (credits[rec.cleaned_by] || 0) + 1;  // cleaned out of turn
+      } else if (ds >= todayStr && i >= 0){
+        p = advance(i);         // today and beyond: assume it gets done
+      }
+      // a past day with nothing logged: the name stays up
+    }
+    return days;
+  }
+
+  let days = [], shown = 0;
+  const nobody = "Nobody (everyone away)";
+  const dayFor = ds => days.find(x => x.ds === ds);
+
+  function render(){
+    const endStr = ymd(new Date(Math.max(today.getTime(), START.getTime()) + HORIZON*DAY));
+    days = simulate(endStr);
+
+    const first = today < START ? START : today;
+    const t0 = dayFor(ymd(first));
+    if (today < START) $("label").textContent = "Starts with";
+    $("who").textContent = t0 ? (t0.who || nobody) : nobody;
+    $("date").textContent = fmt(first, {weekday:"long", day:"numeric", month:"long"});
+
+    const rec = t0 && t0.rec;
+    const st = $("status"), ct = $("controls");
+    st.innerHTML = ""; ct.innerHTML = "";
+    if (rec){
+      const p = document.createElement("p"); p.className = "done";
+      const b = document.createElement("b"); b.textContent = "✓ Cleaned by " + rec.cleaned_by;
+      p.appendChild(b); st.appendChild(p);
+      const t1 = dayFor(ymd(nextDay(first)));
+      const n = document.createElement("div"); n.textContent = "Tomorrow: ";
+      const nb = document.createElement("b"); nb.textContent = t1 ? (t1.who || nobody) : nobody;
+      n.appendChild(nb); st.appendChild(n);
+      const u = document.createElement("button"); u.className = "link"; u.textContent = "undo";
+      u.onclick = undoToday; ct.appendChild(u);
+    } else if (today >= START){
+      const b = document.createElement("button"); b.className = "go"; b.textContent = "I cleaned";
+      b.onclick = () => { $("cleanForm").classList.toggle("open"); $("msg").textContent = ""; };
+      ct.appendChild(b);
+    }
+
+    const prev = shown || 14;
+    $("list").innerHTML = ""; shown = 0; addDays(prev);
+
+    const el = $("trips"); el.innerHTML = "";
+    const upcoming = trips.filter(t => t.to_date >= todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
+    if (!upcoming.length){ const p = document.createElement("p"); p.className = "muted"; p.textContent = "Nobody is away."; el.appendChild(p); }
+    upcoming.forEach(t => {
+      const row = document.createElement("div"); row.className = "trip";
+      const span = document.createElement("span");
+      const nm = document.createElement("b"); nm.textContent = t.name;
+      span.appendChild(nm);
+      span.appendChild(document.createTextNode(" away " + fmtStr(t.from_date) + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : "")));
+      const x = document.createElement("button"); x.textContent = "×"; x.title = "Remove";
+      x.onclick = () => removeTrip(t.id);
+      row.appendChild(span); row.appendChild(x); el.appendChild(row);
+    });
+  }
+
+  function addDays(n){
+    const base = today < START ? START : today;
+    for (let i = 0; i < n && shown < HORIZON; i++, shown++){
+      const d = dayFor(ymd(new Date(base.getTime() + shown*DAY)));
+      if (!d) break;
+      const tr = document.createElement("tr");
+      if (d.ds === todayStr) tr.className = "now";
+      const a = document.createElement("td"); a.textContent = fmt(d.date, {weekday:"short", day:"numeric", month:"short"});
+      const b = document.createElement("td"); b.textContent = d.who || nobody;
+      const c = document.createElement("td"); c.className = "tick"; c.textContent = d.rec ? "✓" : "";
+      tr.appendChild(a); tr.appendChild(b); tr.appendChild(c);
+      $("list").appendChild(tr);
+    }
+  }
+
+  async function load(){
+    if (!configured){ $("msg").textContent = "Setup needed: paste the Supabase URL and key into index.html."; render(); return; }
+    try {
+      const r1 = await api("trips?select=id,name,from_date,to_date");
+      const r2 = await api("cleanings?select=id,cleaned_date,cleaned_by&order=cleaned_date");
+      if (!r1.ok || !r2.ok) throw new Error("http");
+      trips = await r1.json();
+      cleanings = await r2.json();
+      $("msg").textContent = "";
+    } catch(e){
+      $("msg").textContent = "Couldn't reach the list. What you see may be out of date.";
+    }
+    render();
+  }
+
+  async function markClean(name){
+    $("msg").textContent = "Saving…";
+    try {
+      const r = await api("cleanings", { method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ cleaned_date: todayStr, cleaned_by: name }) });
+      if (r.status === 409){ $("msg").textContent = "Someone already marked today."; await load(); return; }
+      if (!r.ok) throw new Error("http");
+      $("cleanForm").classList.remove("open");
+      await load();
+    } catch(e){ $("msg").textContent = "Couldn't save. Try again."; }
+  }
+
+  async function undoToday(){
+    $("msg").textContent = "Saving…";
+    try {
+      const r = await api("cleanings?cleaned_date=eq." + todayStr, { method: "DELETE" });
+      if (!r.ok) throw new Error("http");
+      await load();
+    } catch(e){ $("msg").textContent = "Couldn't undo. Try again."; }
+  }
+
+  async function removeTrip(id){
+    $("msg").textContent = "Saving…";
+    try {
+      const r = await api("trips?id=eq." + encodeURIComponent(id), { method: "DELETE" });
+      if (!r.ok) throw new Error("http");
+      await load();
+    } catch(e){ $("msg").textContent = "Couldn't remove it. Try again."; }
+  }
+
+  CYCLE.forEach(n => {
+    [$("fName"), $("cName")].forEach(sel => {
+      const o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o);
+    });
+  });
+  const firstDay = today < START ? START : today;
+  $("fFrom").value = ymd(firstDay); $("fTo").value = ymd(firstDay);
+  $("openForm").onclick = () => { $("form").classList.toggle("open"); $("msg").textContent = ""; };
+  $("cancel").onclick = () => $("form").classList.remove("open");
+  $("cCancel").onclick = () => $("cleanForm").classList.remove("open");
+  $("cSave").onclick = () => { if (!configured){ $("msg").textContent = "Setup needed: paste the Supabase URL and key into index.html."; return; } markClean($("cName").value); };
+  $("fFrom").onchange = () => { if ($("fTo").value < $("fFrom").value) $("fTo").value = $("fFrom").value; };
+  $("more").onclick = () => addDays(14);
+
+  $("save").onclick = async () => {
+    const name = $("fName").value, from_date = $("fFrom").value, to_date = $("fTo").value;
+    if (!name || !from_date || !to_date || to_date < from_date){ $("msg").textContent = "Pick a name and valid dates (last day can't be before the first)."; return; }
+    if (to_date < todayStr){ $("msg").textContent = "That trip is already over."; return; }
+    if (!configured){ $("msg").textContent = "Setup needed: paste the Supabase URL and key into index.html."; return; }
+    $("msg").textContent = "Saving…";
+    try {
+      const r = await api("trips", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ name: name, from_date: from_date, to_date: to_date }) });
+      if (!r.ok) throw new Error("http");
+      $("form").classList.remove("open");
+      await load();
+    } catch(e){ $("msg").textContent = "Couldn't save. Try again."; }
+  };
+
+  load();
+  setInterval(load, 60000);
+</script>
+</body>
+</html>
