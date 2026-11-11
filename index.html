@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen Rotation</title>
+<style>
+  body{margin:0;background:#d9d9d9;color:#111;font-family:"Times New Roman",Times,serif;font-size:18px;line-height:1.4}
+  .wrap{max-width:600px;margin:0 auto;padding:22px 14px 50px}
+  h1{font-size:1.9rem;margin:0 0 4px}
+  .sub{margin:0 0 16px}
+  .sec{background:#fff;border-left:8px solid var(--c);padding:12px 16px;margin:12px 0}
+  .sec h2{font-size:1.15rem;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;color:var(--c)}
+  .today{--c:#c0392b}
+  .duty{--c:#1f6fb2}
+  .order{--c:#2e8b57}
+  .away{--c:#7d3c98}
+  .sched{--c:#b8860b}
+  .big{font-size:2.2rem;font-weight:bold;line-height:1.1}
+  ul{margin:0;padding-left:20px}
+  li{margin:5px 0}
+  p{margin:5px 0}
+  table{border-collapse:collapse;width:100%}
+  td{border-bottom:1px solid #ddd;padding:5px 4px}
+  tr.now td{font-weight:bold;background:#fdf1d0}
+  button,select,input{font-family:inherit;font-size:1rem}
+  button{background:#fff;border:1px solid #111;padding:4px 12px;cursor:pointer}
+  button.primary{background:#7d3c98;color:#fff;border-color:#7d3c98;font-weight:bold}
+  .form{margin-top:10px;padding:10px;background:#f3ecf6;display:none}
+  .form.open{display:block}
+  .form label{display:block;margin:6px 0 2px;font-weight:bold}
+  .form select,.form input{padding:4px;width:100%;box-sizing:border-box}
+  .trip{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ddd;padding:5px 0}
+  .trip button{padding:0 9px;font-weight:bold}
+  .msg{margin-top:8px;font-weight:bold;color:#c0392b}
+  .muted{color:#555}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Kitchen Rotation</h1>
+  <p class="sub"><b>One person per day.</b> Kitchen clean before bed.</p>
+
+  <div class="sec today">
+    <h2 id="label">Today</h2>
+    <div class="big" id="who">…</div>
+    <div id="date"></div>
+    <div>Tomorrow: <b id="next"></b></div>
+  </div>
+
+  <div class="sec duty">
+    <h2>Your day</h2>
+    <ul>
+      <li><b>Morning:</b> unload the dishwasher</li>
+      <li><b>Night:</b> load the dishwasher and <b>run it</b></li>
+      <li>Wipe counters and stovetop</li>
+      <li>Empty the sink, trash out if full</li>
+      <li><b>Vacuum</b> the kitchen floor</li>
+    </ul>
+    <p>Can't do it? <b>Swap with someone</b> and tell the group chat. Don't just skip.</p>
+  </div>
+
+  <div class="sec order">
+    <h2>Order</h2>
+    <p><b>David → Zara → Jelena → Chloe → Martina</b>, repeat every 5 days.</p>
+    <p class="muted">Anyone who is away gets skipped.</p>
+  </div>
+
+  <div class="sec away">
+    <h2>Traveling</h2>
+    <div id="trips"><p class="muted">Loading…</p></div>
+    <button class="primary" id="openForm">I'm traveling</button>
+    <div class="form" id="form">
+      <label for="fName">Who</label>
+      <select id="fName"></select>
+      <label for="fFrom">First day away</label>
+      <input type="date" id="fFrom">
+      <label for="fTo">Last day away</label>
+      <input type="date" id="fTo">
+      <p><button class="primary" id="save">Save</button> <button id="cancel">Cancel</button></p>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="sec sched">
+    <h2>Schedule</h2>
+    <table id="list"></table>
+    <button id="more">Show more</button>
+  </div>
+</div>
+
+<script>
+  // ====== PASTE YOUR SUPABASE VALUES HERE ======
+  const SUPABASE_URL = "PASTE_PROJECT_URL_HERE";      // e.g. https://abcdxyz.supabase.co
+  const SUPABASE_KEY = "PASTE_ANON_PUBLIC_KEY_HERE";  // the "anon" / "publishable" key
+  // =============================================
+
+  const CYCLE = ["David","Zara","Jelena","Chloe","Martina"];
+  const START = new Date(2026, 10, 12); // Thu Nov 12, 2026
+  const DAY = 86400000, HORIZON = 120;
+  const $ = id => document.getElementById(id);
+  const midnight = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const ymd = d => d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  const fmt = (d, o) => d.toLocaleDateString("en-GB", o);
+  const fmtStr = s => { const [y,m,dd] = s.split("-").map(Number); return fmt(new Date(y, m-1, dd), {day:"numeric", month:"short"}); };
+
+  const today = midnight(new Date());
+  const first = today < START ? START : today;
+  const todayStr = ymd(today);
+  const configured = !SUPABASE_URL.startsWith("PASTE") && !SUPABASE_KEY.startsWith("PASTE");
+
+  const api = (path, opts = {}) => fetch(SUPABASE_URL + "/rest/v1/" + path, Object.assign({
+    cache: "no-store",
+    headers: Object.assign({ apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" }, opts.headers || {})
+  }, opts, { headers: Object.assign({ apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" }, opts.headers || {}) }));
+
+  let trips = [];
+
+  function isAway(name, ds){ return trips.some(t => t.name === name && t.from_date <= ds && ds <= t.to_date); }
+
+  function buildSchedule(upTo){
+    const out = []; let p = 0;
+    for (let d = new Date(START); d <= upTo; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)){
+      const ds = ymd(d); let who = null;
+      for (let k = 0; k < CYCLE.length; k++){
+        const i = (p + k) % CYCLE.length;
+        if (!isAway(CYCLE[i], ds)){ who = CYCLE[i]; p = (i + 1) % CYCLE.length; break; }
+      }
+      out.push({ date: new Date(d), who });
+    }
+    return out;
+  }
+
+  let sched = [], shown = 0;
+  const nobody = "Nobody (everyone away)";
+  const find = d => sched.find(s => ymd(s.date) === ymd(d));
+
+  function render(){
+    sched = buildSchedule(new Date(first.getTime() + HORIZON*DAY));
+    if (today < START) $("label").textContent = "Starts with";
+    const t0 = find(first), t1 = find(new Date(first.getTime() + DAY));
+    $("who").textContent = (t0 && t0.who) || nobody;
+    $("date").textContent = fmt(first, {weekday:"long", day:"numeric", month:"long"});
+    $("next").textContent = (t1 && t1.who) || nobody;
+
+    const prevShown = shown || 14;
+    $("list").innerHTML = ""; shown = 0; addDays(prevShown);
+
+    const el = $("trips"); el.innerHTML = "";
+    const upcoming = trips.filter(t => t.to_date >= todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
+    if (!upcoming.length){ const p = document.createElement("p"); p.className = "muted"; p.textContent = "Nobody is away."; el.appendChild(p); }
+    upcoming.forEach(t => {
+      const row = document.createElement("div"); row.className = "trip";
+      const span = document.createElement("span");
+      const nm = document.createElement("b"); nm.textContent = t.name;
+      span.append(nm, " away " + fmtStr(t.from_date) + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : ""));
+      const x = document.createElement("button"); x.textContent = "×"; x.title = "Remove";
+      x.onclick = () => removeTrip(t.id);
+      row.append(span, x); el.appendChild(row);
+    });
+  }
+
+  function addDays(n){
+    for (let i = 0; i < n && shown < HORIZON; i++, shown++){
+      const s = find(new Date(first.getTime() + shown*DAY));
+      if (!s) break;
+      const tr = document.createElement("tr");
+      if (ymd(s.date) === todayStr) tr.className = "now";
+      const a = document.createElement("td"); a.textContent = fmt(s.date, {weekday:"short", day:"numeric", month:"short"});
+      const b = document.createElement("td"); b.textContent = s.who || nobody;
+      tr.append(a, b); $("list").appendChild(tr);
+    }
+  }
+
+  async function load(){
+    if (!configured){ $("msg").textContent = "Setup needed: paste the Supabase URL and key into index.html."; render(); return; }
+    try {
+      const r = await api("trips?select=id,name,from_date,to_date&to_date=gte." + todayStr);
+      if (!r.ok) throw new Error(r.status);
+      trips = await r.json();
+      $("msg").textContent = "";
+    } catch(e){
+      $("msg").textContent = "Couldn't load trips. Schedule shown without them.";
+    }
+    render();
+  }
+
+  async function removeTrip(id){
+    $("msg").textContent = "Saving…";
+    try {
+      const r = await api("trips?id=eq." + encodeURIComponent(id), { method: "DELETE" });
+      if (!r.ok) throw new Error(r.status);
+      await load();
+    } catch(e){ $("msg").textContent = "Couldn't remove it. Try again."; }
+  }
+
+  CYCLE.forEach(n => { const o = document.createElement("option"); o.value = n; o.textContent = n; $("fName").appendChild(o); });
+  $("fFrom").value = ymd(first); $("fTo").value = ymd(first);
+  $("openForm").onclick = () => { $("form").classList.toggle("open"); $("msg").textContent = ""; };
+  $("cancel").onclick = () => $("form").classList.remove("open");
+  $("fFrom").onchange = () => { if ($("fTo").value < $("fFrom").value) $("fTo").value = $("fFrom").value; };
+  $("more").onclick = () => addDays(14);
+
+  $("save").onclick = async () => {
+    const name = $("fName").value, from_date = $("fFrom").value, to_date = $("fTo").value;
+    if (!name || !from_date || !to_date || to_date < from_date){ $("msg").textContent = "Pick a name and valid dates (last day can't be before the first)."; return; }
+    if (to_date < todayStr){ $("msg").textContent = "That trip is already over."; return; }
+    if (!configured){ $("msg").textContent = "Setup needed: paste the Supabase URL and key into index.html."; return; }
+    $("msg").textContent = "Saving…";
+    try {
+      const r = await api("trips", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ name, from_date, to_date }) });
+      if (!r.ok) throw new Error(r.status);
+      $("form").classList.remove("open");
+      await load();
+    } catch(e){ $("msg").textContent = "Couldn't save. Try again."; }
+  };
+
+  load();
+  setInterval(load, 60000); // pick up other people's changes
+</script>
+</body>
+</html>
