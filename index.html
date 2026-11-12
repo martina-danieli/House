@@ -96,9 +96,9 @@
   <div class="sec order">
     <h2>Order</h2>
     <p id="orderLine"></p>
-    <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up.</p>
+    <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up, and nothing shifts it: not the running order, not someone's turn back from a trip.</p>
     <p class="small">Clean when it wasn't your turn and you get the next one off. Whoever was due goes again tomorrow.</p>
-    <p class="small">Away: your name is off the list, then comes back up two or three days after your last day away, ahead of whoever was next. More than two weeks away and it's three or four days. Two of you home together take consecutive days, longest since your last turn first.</p>
+    <p class="small">Away: your name is off the list, then comes back up two or three days after your last day away, ahead of whoever was next. More than two weeks away and it's three or four days. Several of you home together take consecutive days from the first one, longest since your last turn going first.</p>
     <p class="small">Clean for someone right before you leave and that pays for your turn back, so you rejoin a full lap later instead.</p>
     <p class="small"><b>Let your name sit there seven days running and you're paying for a cleaning service.</b></p>
   </div>
@@ -200,8 +200,13 @@
     cleanings.forEach(c => { if (!byDate[c.cleaned_date]) byDate[c.cleaned_date] = c; });
     const lastClean = {};
 
-    // One owed turn per trip, on that trip's own day.
+    // One owed turn per trip, on that trip's own day. Two or more home on the
+    // same day fill consecutive days from the first one instead, so the coin
+    // only applies to someone coming home alone.
     const owed = trips.map(t => ({ name: t.name, from: homeDay(t), by: dutyDay(t), done: false }));
+    const sameDay = {};
+    owed.forEach(o => sameDay[o.from] = (sameDay[o.from] || 0) + 1);
+    owed.forEach(o => { if (sameDay[o.from] > 1) o.by = o.from; });
 
     function assign(ds){
       for (let k = 0; k < CYCLE.length; k++){
@@ -252,47 +257,53 @@
     }
 
     const days = [];
-    let streakName = null, streak = 0;
+    let held = null, heldForced = false, streak = 0;
     for (let d = new Date(START); ymd(d) <= endStr; d = nextDay(d)){
       const ds = ymd(d);
-      const nat = assign(ds);                      // whose turn the order says it is
 
-      // Someone owed a turn for coming home. If they already cleaned for
-      // somebody before they left, that pays for this one and they rejoin at
-      // their next turn instead, a full lap later.
-      let back = -1;
-      for (let g = 0; g < CYCLE.length + 1; g++){
-        const o = dueBack(ds);
-        if (!o) break;
-        if (credits[o.name] > 0){ credits[o.name]--; o.done = true; continue; }
-        back = CYCLE.indexOf(o.name);
-        break;
+      // A name left up unclean holds the day. Nothing takes it off them: not
+      // the running order, not a turn owed for coming home. It stays until
+      // they clean it themselves.
+      let who = null, i = -1, forced = false;
+      if (held && !isAway(held, ds)){
+        who = held; i = CYCLE.indexOf(held); forced = heldForced;   // a bumped-in turn stays bumped in
+      } else {
+        const nat = assign(ds);                    // whose turn the order says it is
+        // Someone owed a turn for coming home. If they already cleaned for
+        // somebody before they left, that pays for this one and they rejoin
+        // at their next turn instead, a full lap later.
+        let back = -1;
+        for (let g = 0; g < CYCLE.length + 1; g++){
+          const o = dueBack(ds);
+          if (!o) break;
+          if (credits[o.name] > 0){ credits[o.name]--; o.done = true; continue; }
+          back = CYCLE.indexOf(o.name);
+          break;
+        }
+        forced = back >= 0 && back !== nat;
+        i = forced ? back : nat;
+        who = i >= 0 ? CYCLE[i] : null;
       }
 
-      const forced = back >= 0 && back !== nat;
-      const i = forced ? back : nat;
-      const who = i >= 0 ? CYCLE[i] : null;
-      const natWho = nat >= 0 ? CYCLE[nat] : null;
-      const rec = byDate[ds] || null;
+      if (who && who === held) streak++; else streak = who ? 1 : 0;
 
-      // The run is counted against whoever the order says is up, so being
-      // covered or bumped by someone coming home doesn't wipe it.
-      if (natWho && natWho === streakName) streak++; else { streakName = natWho; streak = natWho ? 1 : 0; }
-      const clearedOwn = !!rec && rec.cleaned_by === natWho;
-      if (clearedOwn){ streakName = null; streak = 0; }
+      const rec = byDate[ds] || null;
+      const cleanedIt = !!rec && rec.cleaned_by === who;        // they did it themselves
+      const assumed = !rec && ds >= todayStr && !!who;          // today on: assume it gets done
 
       days.push({ ds: ds, date: new Date(d), who: who, rec: rec, future: ds > todayStr,
-                  forced: forced, streak: (forced || clearedOwn) ? 0 : streak });
+                  forced: forced, streak: cleanedIt ? 0 : streak });
 
-      const cleaner = rec ? rec.cleaned_by : ((ds >= todayStr && who) ? who : null);  // future days assume it gets done
+      const cleaner = rec ? rec.cleaned_by : (assumed ? who : null);
       if (cleaner){
         lastClean[cleaner] = ds;
         settle(cleaner, ds);
-        if (who && cleaner === who && !forced) p = advance(i, ds);   // their turn, taken
-        else if (!(who && cleaner === who)) credits[cleaner] = (credits[cleaner] || 0) + 1;  // cleaned out of turn
-        // a forced turn taken leaves the order where it was
+        if ((cleanedIt || assumed) && !forced) p = advance(i, ds);              // their turn, taken
+        else if (!cleanedIt && !assumed) credits[cleaner] = (credits[cleaner] || 0) + 1;  // cleaned out of turn
+        // a turn owed for a trip, taken, leaves the order where it was
       }
-      // a past day with nothing logged: the name stays up
+      held = (cleanedIt || assumed) ? null : who;
+      heldForced = (cleanedIt || assumed) ? false : forced;
     }
     return days;
   }
