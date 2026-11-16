@@ -141,8 +141,8 @@
   const SUPABASE_KEY = "sb_publishable_k4zLMNMXy5yKjk5Pd3DWNQ_peZJJqKO";
   // =============================================
 
-  const CYCLE = ["David","Zara","Jelena","Chloe","Martina"];
-  const COLOR = { David:"#c0392b", Zara:"#7d3c98", Jelena:"#1f6fb2", Chloe:"#2e8b57", Martina:"#b8860b" };
+  const CYCLE = ["David","Jelena","Chloe","Martina"];
+  const COLOR = { David:"#c0392b", Jelena:"#1f6fb2", Chloe:"#2e8b57", Martina:"#b8860b" };
   const OWE_AT = 7;                           // name up this many days running -> you pay for a cleaner
   const tint = n => COLOR[n] + "1f";          // same colour, faint, for cell backgrounds
   const START = new Date(2026, 10, 11);   // Wed 11 Nov 2026
@@ -199,6 +199,7 @@
     const byDate = {};
     cleanings.forEach(c => { if (!byDate[c.cleaned_date]) byDate[c.cleaned_date] = c; });
     const lastClean = {};
+    const rejoin = {};                             // name -> first day they can be up again
 
     // One owed turn per trip, on that trip's own day. Two or more home on the
     // same day fill consecutive days from the first one instead, so the coin
@@ -208,12 +209,13 @@
     owed.forEach(o => sameDay[o.from] = (sameDay[o.from] || 0) + 1);
     owed.forEach(o => { if (sameDay[o.from] > 1) o.by = o.from; });
 
+    const available = (name, ds) => !isAway(name, ds) && !(rejoin[name] && ds < rejoin[name]);
     function assign(ds){
       for (let k = 0; k < CYCLE.length; k++){
         const i = (p + k) % CYCLE.length;
-        if (!isAway(CYCLE[i], ds)) return i;
+        if (available(CYCLE[i], ds)) return i;
       }
-      return -1;                                   // everyone away
+      return -1;                                   // nobody available
     }
     function rank(name){
       const i = CYCLE.indexOf(name);
@@ -225,7 +227,7 @@
       let best = null;
       for (let q = 0; q < owed.length; q++){
         const o = owed[q];
-        if (o.done || ds < o.by || isAway(o.name, ds)) continue;
+        if (o.done || ds < o.by || !available(o.name, ds)) continue;
         if (!best){ best = o; continue; }
         if (o.by !== best.by){ if (o.by < best.by) best = o; continue; }
         const a = lastClean[o.name] || "", b = lastClean[best.name] || "";
@@ -249,7 +251,8 @@
         // for the turn they're owed when they get back.
         if (credits[n] > 0 && !isAway(n, nextDs)){
           credits[n]--;
-          settle(n, nextDs);
+          const o = owed.filter(q => !q.done && q.name === n && nextDs >= q.from)[0];
+          if (o){ o.done = true; rejoin[n] = shift(o.by, CYCLE.length); }   // that paid for the turn back
           i = (i + 1) % CYCLE.length;
         } else break;
       }
@@ -276,7 +279,11 @@
         for (let g = 0; g < CYCLE.length + 1; g++){
           const o = dueBack(ds);
           if (!o) break;
-          if (credits[o.name] > 0){ credits[o.name]--; o.done = true; continue; }
+          if (credits[o.name] > 0){                  // they cleaned for someone before leaving
+          credits[o.name]--; o.done = true;
+          rejoin[o.name] = shift(o.by, CYCLE.length);   // next turn is the one after this
+          continue;
+        }
           back = CYCLE.indexOf(o.name);
           break;
         }
@@ -356,17 +363,22 @@
     renderOrder(); renderCal();
 
     const el = $("trips"); el.innerHTML = "";
-    const upcoming = trips.filter(t => dutyDay(t) >= todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
+    // Trips are kept for good, but a trip drops off this list once the turn it
+    // owes has been and gone. If a stuck name delayed that turn, it stays up.
+    const turnOf = t => {
+      const x = days.find(y => y.who === t.name && y.ds >= homeDay(t));
+      return x ? x.ds : dutyDay(t);
+    };
+    const upcoming = trips.filter(t => turnOf(t) >= todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
     if (!upcoming.length){ const p = document.createElement("p"); p.className = "muted"; p.textContent = "Nobody is away."; el.appendChild(p); }
     upcoming.forEach(t => {
       const row = document.createElement("div"); row.className = "trip";
       const span = document.createElement("span");
       const nm = document.createElement("b"); nm.textContent = t.name;
       span.appendChild(nm);
-      const turn = days.find(x => x.who === t.name && x.ds >= homeDay(t));   // the day the schedule actually gives them
       span.appendChild(document.createTextNode(" away " + fmtStr(t.from_date)
         + (t.to_date !== t.from_date ? " – " + fmtStr(t.to_date) : "")
-        + ". Next turn " + fmtStr(turn ? turn.ds : dutyDay(t)) + "."));
+        + ". Next turn " + fmtStr(turnOf(t)) + "."));
       const x = document.createElement("button"); x.textContent = "×"; x.title = "Remove";
       x.onclick = () => removeTrip(t.id);
       row.appendChild(span); row.appendChild(x); el.appendChild(row);
@@ -456,7 +468,7 @@
       const r1 = await api("trips?select=id,name,from_date,to_date");
       const r2 = await api("cleanings?select=id,cleaned_date,cleaned_by&order=cleaned_date");
       if (!r1.ok || !r2.ok) throw new Error("http");
-      trips = await r1.json();
+      trips = (await r1.json()).filter(t => CYCLE.indexOf(t.name) >= 0);   // drop anyone off the rotation
       cleanings = await r2.json();
       $("msg").textContent = "";
     } catch(e){
