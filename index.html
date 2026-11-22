@@ -97,9 +97,10 @@
     <h2>Order</h2>
     <p id="orderLine"></p>
     <p class="small">Next up is always whoever has been home longest since they last cleaned. Days away don't count, so a trip doesn't push you to the front or the back.</p>
-    <p class="small">It moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up, but only for three days. After that it passes to whoever's waited longest, and your name comes back up soon after.</p>
+    <p class="small">It moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up until you clean. Then it goes to whoever's waited longest.</p>
     <p class="small">Clean when it wasn't your turn and your wait starts again from that day, so the next turn goes to someone else.</p>
     <p class="small">Away: your name is off the list until two days after your last day away (three if you were gone more than two weeks).</p>
+    <p class="small"><b>Let your name sit there seven days running and you're paying for a cleaning service.</b></p>
   </div>
 
   <div class="sec away">
@@ -142,7 +143,6 @@
 
   const CYCLE = ["David","Jelena","Chloe","Martina"];
   const COLOR = { David:"#c0392b", Jelena:"#1f6fb2", Chloe:"#2e8b57", Martina:"#b8860b" };
-  const HOLD_MAX = 3;                         // up this many days without cleaning -> the turn passes on
   const NEW_RULES_FROM = "2026-11-23";        // from this day: longest home since last clean goes next
   const OWE_AT = 7;                          // name up this many days running -> you pay for a cleaner
   const tint = n => COLOR[n] + "1f";          // same colour, faint, for cell backgrounds
@@ -283,12 +283,10 @@
       const newRules = ds >= NEW_RULES_FROM;
       let who = null, i = -1, forced = false;
       if (newRules){
-        // Whoever has been home longest since they last cleaned is up. A name
-        // left up unclean keeps the day, but only for HOLD_MAX days; then it
-        // passes to the next longest, and they're back in the queue.
-        if (held && !isAway(held, ds) && streak < HOLD_MAX) i = CYCLE.indexOf(held);
-        else i = longestWaiting(ds, held && streak >= HOLD_MAX ? held : null);
-        if (i < 0 && held && !isAway(held, ds)) i = CYCLE.indexOf(held);   // nobody else home
+        // A name left up unclean stays up until they clean it themselves.
+        // Otherwise whoever has been home longest since they last cleaned is up.
+        if (held && !isAway(held, ds)) i = CYCLE.indexOf(held);
+        else i = longestWaiting(ds, null);
         who = i >= 0 ? CYCLE[i] : null;
       } else if (held && !isAway(held, ds)){
         // Before NEW_RULES_FROM: a name left up unclean held the day until
@@ -376,7 +374,7 @@
         st.appendChild(w);
       } else if (t0.streak >= 2){
         const w = document.createElement("p"); w.className = "small muted";
-        w.textContent = "Day " + t0.streak + " of " + HOLD_MAX + ". After that it passes to the next person.";
+        w.textContent = "Day " + t0.streak + " of " + OWE_AT + ". At " + OWE_AT + " you're paying for a cleaner.";
         st.appendChild(w);
       }
       const b = document.createElement("button"); b.className = "go"; b.textContent = "I cleaned";
