@@ -363,13 +363,13 @@
     renderOrder(); renderCal();
 
     const el = $("trips"); el.innerHTML = "";
-    // Trips are kept for good, but a trip drops off this list once the turn it
-    // owes has been and gone. If a stuck name delayed that turn, it stays up.
+    // Trips are kept in storage for good (the rotation still uses them), but a
+    // trip is archived from this list once its last day away has passed.
     const turnOf = t => {
       const x = days.find(y => y.who === t.name && y.ds >= homeDay(t));
       return x ? x.ds : dutyDay(t);
     };
-    const upcoming = trips.filter(t => turnOf(t) >= todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
+    const upcoming = trips.filter(t => t.to_date >= todayStr).sort((a,b) => a.from_date < b.from_date ? -1 : 1);
     if (!upcoming.length){ const p = document.createElement("p"); p.className = "muted"; p.textContent = "Nobody is away."; el.appendChild(p); }
     upcoming.forEach(t => {
       const row = document.createElement("div"); row.className = "trip";
