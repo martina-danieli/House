@@ -96,10 +96,10 @@
   <div class="sec order">
     <h2>Order</h2>
     <p id="orderLine"></p>
-    <p class="small">It only moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up, and nothing shifts it: not the running order, not someone's turn back from a trip.</p>
-    <p class="small">Clean when it wasn't your turn and you get the next one off. Whoever was due goes again tomorrow.</p>
-    <p class="small">Away: your name is off the list, then comes back up two or three days after your last day away, ahead of whoever was next. More than two weeks away and it's three or four days. Several of you home together take consecutive days from the first one, longest since your last turn going first.</p>
-    <p class="small">Clean for someone right before you leave and that pays for your turn back, so you rejoin a full lap later instead.</p>
+    <p class="small">Next up is always whoever has been home longest since they last cleaned. Days away don't count, so a trip doesn't push you to the front or the back.</p>
+    <p class="small">It moves on when the person on duty presses <b>I cleaned</b>. Miss a day and your name stays up until you clean. Then it goes to whoever's waited longest.</p>
+    <p class="small">Clean when it wasn't your turn and your wait starts again from that day, so the next turn goes to someone else.</p>
+    <p class="small">Away: your name is off the list until two days after your last day away (three if you were gone more than two weeks).</p>
     <p class="small"><b>Let your name sit there seven days running and you're paying for a cleaning service.</b></p>
   </div>
 
@@ -143,7 +143,8 @@
 
   const CYCLE = ["David","Jelena","Chloe","Martina"];
   const COLOR = { David:"#c0392b", Jelena:"#1f6fb2", Chloe:"#2e8b57", Martina:"#b8860b" };
-  const OWE_AT = 7;                           // name up this many days running -> you pay for a cleaner
+  const NEW_RULES_FROM = "2026-11-23";        // from this day: longest home since last clean goes next
+  const OWE_AT = 7;                          // name up this many days running -> you pay for a cleaner
   const tint = n => COLOR[n] + "1f";          // same colour, faint, for cell backgrounds
   const START = new Date(2026, 10, 11);   // Wed 11 Nov 2026
   const DAY = 86400000, HORIZON = 120;
@@ -259,16 +260,37 @@
       return i;
     }
 
+    // Days each person has been home since they last cleaned. Days away
+    // don't count, so coming back from a trip doesn't put you at the front.
+    const waited = {};
+    CYCLE.forEach(n => waited[n] = 0);
+    // Who has waited longest, leaving out `skip`. Ties go by running order.
+    function longestWaiting(ds, skip){
+      let best = -1;
+      for (let k = 0; k < CYCLE.length; k++){
+        const j = (p + k) % CYCLE.length, n = CYCLE[j];
+        if (n === skip || !available(n, ds)) continue;
+        if (best < 0 || waited[n] > waited[CYCLE[best]]) best = j;
+      }
+      return best;
+    }
+
     const days = [];
     let held = null, heldForced = false, streak = 0;
     for (let d = new Date(START); ymd(d) <= endStr; d = nextDay(d)){
       const ds = ymd(d);
 
-      // A name left up unclean holds the day. Nothing takes it off them: not
-      // the running order, not a turn owed for coming home. It stays until
-      // they clean it themselves.
+      const newRules = ds >= NEW_RULES_FROM;
       let who = null, i = -1, forced = false;
-      if (held && !isAway(held, ds)){
+      if (newRules){
+        // A name left up unclean stays up until they clean it themselves.
+        // Otherwise whoever has been home longest since they last cleaned is up.
+        if (held && !isAway(held, ds)) i = CYCLE.indexOf(held);
+        else i = longestWaiting(ds, null);
+        who = i >= 0 ? CYCLE[i] : null;
+      } else if (held && !isAway(held, ds)){
+        // Before NEW_RULES_FROM: a name left up unclean held the day until
+        // they cleaned it themselves.
         who = held; i = CYCLE.indexOf(held); forced = heldForced;   // a bumped-in turn stays bumped in
       } else {
         const nat = assign(ds);                    // whose turn the order says it is
@@ -305,10 +327,12 @@
       if (cleaner){
         lastClean[cleaner] = ds;
         settle(cleaner, ds);
-        if ((cleanedIt || assumed) && !forced) p = advance(i, ds);              // their turn, taken
+        if (newRules){ if (cleanedIt || assumed) p = (i + 1) % CYCLE.length; }   // only breaks ties now
+        else if ((cleanedIt || assumed) && !forced) p = advance(i, ds);              // their turn, taken
         else if (!cleanedIt && !assumed) credits[cleaner] = (credits[cleaner] || 0) + 1;  // cleaned out of turn
         // a turn owed for a trip, taken, leaves the order where it was
       }
+      CYCLE.forEach(n => { if (n === cleaner) waited[n] = 0; else if (!isAway(n, ds)) waited[n]++; });
       held = (cleanedIt || assumed) ? null : who;
       heldForced = (cleanedIt || assumed) ? false : forced;
     }
@@ -385,10 +409,14 @@
     });
   }
 
-  // The order line, each name in its own colour. Doubles as the key.
+  // The order line: who's coming up, from today, each name in its own
+  // colour. Doubles as the key.
   function renderOrder(){
     const el = $("orderLine"); el.innerHTML = "";
-    CYCLE.forEach((n, i) => {
+    const next = [];
+    days.forEach(d => { if (d.ds >= todayStr && d.who && next.indexOf(d.who) < 0) next.push(d.who); });
+    CYCLE.forEach(n => { if (next.indexOf(n) < 0) next.push(n); });   // anyone away goes at the end
+    next.forEach((n, i) => {
       const b = document.createElement("b");
       b.textContent = n; b.style.color = COLOR[n];
       el.appendChild(b);
